@@ -112,21 +112,18 @@ class ExchangeAgent:
 
         :return: void
         """
-        bid, ask = self.spread().values()
         t_cost = self.transaction_cost
-        if not bid or not ask:
-            return
-
         if order.order_type == 'bid':
-            if order.price >= ask:
-                order = self.order_book['ask'].fulfill(order, t_cost)
+            asks = self.order_book['ask']
+            if asks and order.price >= asks.first.price:
+                order = asks.fulfill(order, t_cost)
             if order.qty > 0:
                 self.order_book['bid'].insert(order)
-            return
 
         elif order.order_type == 'ask':
-            if order.price <= bid:
-                order = self.order_book['bid'].fulfill(order, t_cost)
+            bids = self.order_book['bid']
+            if bids and order.price <= bids.first.price:
+                order = bids.fulfill(order, t_cost)
             if order.qty > 0:
                 self.order_book['ask'].insert(order)
 
@@ -387,16 +384,22 @@ class Chartist(Trader):
     buys stock or sells. Sentiment revaluation happens at the end of each iteration based on opinion
     propagation among other chartists, current price changes.
     """
-    def __init__(self, market: ExchangeAgent, cash: float or int, assets: int = 0, J: float = 0.0):
+    def __init__(self, market: ExchangeAgent, cash: float or int, assets: int = 0, J: float = 0.0,
+                 a1: float = 1.0, a2: float = 1.0, v1: float = 0.1):
         """
         :param market: exchange agent link
         :param cash: number of cash
         :param assets: number of assets
+        :param J: local coupling to ring neighbours
+        :param a1: weight of the global chartist opinion (herding)
+        :param a2: weight of the price trend
+        :param v1: frequency of revaluation of opinion
         """
         super().__init__(market, cash, assets)
         self.type = 'Chartist'
         self.sentiment = 'Optimistic' if random.random() > .5 else 'Pessimistic'
         self.J = J
+        self.a1, self.a2, self.v1 = a1, a2, v1
 
     def call(self):
         """
@@ -406,6 +409,8 @@ class Chartist(Trader):
         random_state = random.random()
         t_cost = self.market.transaction_cost
         spread = self.market.spread()
+        if spread is None:  # one side of the book is empty: skip this turn
+            return
 
         if self.sentiment == 'Optimistic':
             # Market order
@@ -430,25 +435,22 @@ class Chartist(Trader):
                 if self.orders:
                     self._cancel_order(self.orders[-1])
 
-    def change_sentiment(self, info, a1=1, a2=1, v1=.1):
+    def sentiment_field(self, info, a1, a2, v1) -> float:
         """
-        Change sentiment
+        Field U that drives the switch between optimism and pessimism:
 
-        :param info: SimulatorInfo
-        :param a1: importance of chartists opinion
-        :param a2: importance of current price changes
-        :param v1: frequency of revaluation of opinion for sentiment
+            U = a1 * x + (a2 / v1) * (dp/dt) / p + J * local
+
+        x is the global chartist opinion, local is the mean sentiment of ring neighbours.
+        The price term follows Lux & Marchesi as written in Samanidou, Zschischang, Stauffer & Lux
+        (2007), eq. (17): the price change is divided by v1. The coursework code multiplied by v1.
+
         """
-        n_traders = len(info.traders)  # number of all traders
-
-        last_types = info.types[-1]        # dict id -> type
-        last_sents = info.sentiments[-1]   # dict id -> sentiment
-
         n_chartists = sum([tr_type == 'Chartist' for tr_type in info.types[-1].values()])
-        n_optimistic = sum([tr_type == 'Optimistic' for tr_type in info.sentiments[-1].values()])
-        n_pessimists = sum([tr_type == 'Pessimistic' for tr_type in info.sentiments[-1].values()])
+        n_optimistic = sum([s == 'Optimistic' for s in info.sentiments[-1].values()])
+        n_pessimists = sum([s == 'Pessimistic' for s in info.sentiments[-1].values()])
 
-        dp = info.prices[-1] - info.prices[-2] if len(info.prices) > 1 else 0  # price derivative
+        dp = info.prices[-1] - info.prices[-2] if len(info.prices) > 1 else 0  # price change per step
         p = self.market.price()  # market price
         x = (n_optimistic - n_pessimists) / n_chartists if n_chartists > 0 else 0.0
 
@@ -462,7 +464,25 @@ class Chartist(Trader):
         if self.neighbors:
             local /= len(self.neighbors)
 
-        U = a1 * x + a2 * v1 * dp / p + self.J * local
+        return a1 * x + (a2 / v1) * dp / p + self.J * local
+
+    def change_sentiment(self, info, a1=None, a2=None, v1=None):
+        """
+        Change sentiment. Parameters left as None are taken from the agent (set in __init__).
+
+        :param info: SimulatorInfo
+        :param a1: importance of chartists opinion
+        :param a2: importance of current price changes
+        :param v1: frequency of revaluation of opinion for sentiment
+
+        """
+        a1 = self.a1 if a1 is None else a1
+        a2 = self.a2 if a2 is None else a2
+        v1 = self.v1 if v1 is None else v1
+        n_traders = len(info.traders)  # number of all traders
+        n_chartists = sum([tr_type == 'Chartist' for tr_type in info.types[-1].values()])
+
+        U = self.sentiment_field(info, a1, a2, v1)
         if self.sentiment == 'Optimistic':
             prob = v1 * (n_chartists / n_traders if n_traders > 0 else 0.0) * exp(-U)
             if random.random() < prob:
@@ -561,32 +581,43 @@ class MarketMaker(Trader):
     spread between bid and ask prices, and maintain its assets to cash ratio in balance.
     """
 
-    def __init__(self, market: ExchangeAgent, cash: float, assets: int = 0, softlimit: int = 100):
+    def __init__(self, market: ExchangeAgent, cash: float, assets: int = 0, softlimit: int = 100,
+                 min_quote: int = 5):
+        """
+        :param softlimit: inventory level at which the quoted size on that side falls to min_quote
+        :param min_quote: quoting obligation, the size always posted on each side of the book
+
+        """
         super().__init__(market, cash, assets)
         self.type = 'Market Maker'
         self.softlimit = softlimit
         self.ul = softlimit
         self.ll = -softlimit
-        self.panic = False
+        self.min_quote = min_quote
 
     def call(self):
-        # Clear previous orders
+        """
+        Re-quote both sides every step.
+
+        Inventory control: both quotes are shifted in the same direction, down when the maker is long
+        and up when it is short, by at most one spread width, so the quotes never cross the book.
+        Quoting obligation: at least `min_quote` lots stay on each side even at the inventory limit,
+        so the order book cannot run empty while market makers are present.
+        The coursework version shifted bid and ask in opposite directions (a long maker raised its bid
+        towards the ask and bought more) and stopped quoting at the limit; its "panic" branch never ran.
+
+        """
         for order in self.orders.copy():
             self._cancel_order(order)
 
         spread = self.market.spread()
+        if spread is None:
+            return
 
-        # Calculate bid and ask volume
-        bid_volume = max(0., self.ul - 1 - self.assets)
-        ask_volume = max(0., self.assets - self.ll - 1)
+        bid_volume = max(self.min_quote, self.ul - 1 - self.assets)
+        ask_volume = max(self.min_quote, self.assets - self.ll - 1)
 
-        # If in panic state we only either sell or buy commodities
-        if not bid_volume or not ask_volume:
-            self.panic = True
-            self._buy_market((self.ul + self.ll) / 2 - self.assets) if ask_volume is None else None
-            self._sell_market(self.assets - (self.ul + self.ll) / 2) if bid_volume is None else None
-        else:
-            self.panic = False
-            base_offset = -((spread['ask'] - spread['bid']) * (self.assets / self.softlimit))  # Price offset
-            self._buy_limit(bid_volume, spread['bid'] - base_offset - .1)  # BID
-            self._sell_limit(ask_volume, spread['ask'] + base_offset + .1)  # ASK
+        inventory = max(-1.0, min(1.0, self.assets / self.softlimit))
+        shift = -(spread['ask'] - spread['bid']) * inventory  # < 0 when long, > 0 when short
+        self._buy_limit(bid_volume, spread['bid'] + shift - .1)   # BID
+        self._sell_limit(ask_volume, spread['ask'] + shift + .1)  # ASK

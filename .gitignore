@@ -33,3 +33,8 @@ results/*.csv
 # Figures are rendered at runtime (plt.show); if you save them, keep them out of git:
 results/**/*.png
 *.png
+
+# ---- Kept on purpose ----
+# Debug figures and tables referenced in docs/ (the project plan asks for them in git)
+!docs/*.png
+!docs/*.csv
