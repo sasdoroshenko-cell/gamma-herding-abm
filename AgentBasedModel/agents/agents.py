@@ -24,6 +24,7 @@ class ExchangeAgent:
         ExchangeAgent.id += 1
 
         self.order_book = {'bid': OrderList('bid'), 'ask': OrderList('ask')}
+        self.flow = dict()  # agent type -> signed aggressive volume in the current step (buy +, sell -)
         self.dividend_book = list()  # list of future dividends
         self.risk_free = rf
         self.transaction_cost = transaction_cost
@@ -106,17 +107,40 @@ class ExchangeAgent:
     def _next_dividend(cls, std=5e-3):
         return exp(random.normalvariate(0, std))
 
+    def _record_flow(self, order: Order, executed: float):
+        """
+        Add the executed part of an aggressive order (one that took liquidity from the book)
+        to the flow of the current step: buys count with +, sells with -, keyed by agent type.
+        """
+        if executed <= 0:
+            return
+        key = order.trader.type if order.trader is not None else 'Unknown'
+        sign = 1 if order.order_type == 'bid' else -1
+        self.flow[key] = self.flow.get(key, 0) + sign * executed
+
+    def pop_flow(self) -> dict:
+        """
+        Return the aggressive order flow accumulated since the last call and reset it.
+
+        :return: {agent type: signed volume}
+        """
+        flow, self.flow = self.flow, dict()
+        return flow
+
     def limit_order(self, order: Order):
         """
-        Executes limit order, fulfilling orders if on other side of spread
+        Executes limit order, fulfilling orders if on other side of spread.
+        The part executed on arrival is recorded as aggressive flow.
 
         :return: void
         """
         t_cost = self.transaction_cost
+        qty_before = order.qty
         if order.order_type == 'bid':
             asks = self.order_book['ask']
             if asks and order.price >= asks.first.price:
                 order = asks.fulfill(order, t_cost)
+                self._record_flow(order, qty_before - order.qty)
             if order.qty > 0:
                 self.order_book['bid'].insert(order)
 
@@ -124,20 +148,24 @@ class ExchangeAgent:
             bids = self.order_book['bid']
             if bids and order.price <= bids.first.price:
                 order = bids.fulfill(order, t_cost)
+                self._record_flow(order, qty_before - order.qty)
             if order.qty > 0:
                 self.order_book['ask'].insert(order)
 
     def market_order(self, order: Order) -> Order:
         """
-        Executes market order, fulfilling orders on the other side of spread
+        Executes market order, fulfilling orders on the other side of spread.
+        The executed part is recorded as aggressive flow.
 
         :return: Order
         """
         t_cost = self.transaction_cost
+        qty_before = order.qty
         if order.order_type == 'bid':
             order = self.order_book['ask'].fulfill(order, t_cost)
         elif order.order_type == 'ask':
             order = self.order_book['bid'].fulfill(order, t_cost)
+        self._record_flow(order, qty_before - order.qty)
         return order
 
     def cancel_order(self, order: Order):

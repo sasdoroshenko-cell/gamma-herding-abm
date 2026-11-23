@@ -31,6 +31,20 @@ python scripts/debug_sweep_J.py            # отладочная развёрт
 pytest                                     # проверки изменений модели
 ```
 
+## Журнал потока заявок
+
+На каждом шаге биржа записывает «агрессивный» поток: сколько каждый тип агентов купил (+) или продал (−) заявками, которые сразу исполнились против стакана (рыночные заявки и лимитные, пересёкшие спред). Заявки, которые просто встали в стакан, в поток не входят.
+
+```python
+from AgentBasedModel.builder import MarketConfig, build_market, run
+
+market = build_market(MarketConfig(a1=0.6), seed=1)
+run(market, 1500)
+info = market.simulator.info
+info.flows[t]                 # {'Random': 3, 'Chartist': -5, ...} за шаг t
+info.prices[t + 1] - info.prices[t]   # изменение цены, которое этот поток вызвал
+```
+
 ## Структура
 
 | Путь | Что | Кто |

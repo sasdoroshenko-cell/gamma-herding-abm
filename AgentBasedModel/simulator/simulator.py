@@ -43,6 +43,9 @@ class Simulator:
             for trader in self.traders:
                 trader.call()
 
+            # Aggressive order flow of this step; it moves the price from prices[it] to prices[it + 1]
+            self.info.flows.append(self.exchange.pop_flow())
+
             # Payments and dividends
             self._payments()  # pay dividends
             self.exchange.generate_dividend()  # generate next dividends
@@ -64,6 +67,7 @@ class SimulatorInfo:
         self.spreads = list()  # bid-ask spreads
         self.dividends = list()  # dividend paid at each iteration
         self.orders = list()  # order book statistics
+        self.flows = list()  # per step: {agent type: signed aggressive volume}, buy +, sell -
 
         # Agent statistics
         self.equities = list()  # agent: equity
