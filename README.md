@@ -26,10 +26,24 @@ python3.12 -m venv .venv
 ```bash
 python scripts/smoke_run.py --J 0          # один прогон, сводка и график цены и |m|
 python scripts/smoke_run.py --J 0.8 --a1 0.6
+python scripts/smoke_run.py --J 0.5 --a1 0.6 --dealer short --book 288   # с дилерами
 python scripts/debug_sweep_J.py --quick    # маленькая развёртка по J, проверка что всё работает
 python scripts/debug_sweep_J.py            # отладочная развёртка: docs/debug_sweep_J.png
-pytest                                     # проверки изменений модели
+python scripts/mechanism_check.py          # проверка механизма хеджа: docs/mechanism_check.png
+pytest                                     # проверки модели
 ```
+
+## Дилеры
+
+12 дилеров опционов (`AgentBasedModel/agents/dealer.py`) есть в каждом рынке. Режим задаётся в `MarketConfig`:
+
+```python
+MarketConfig(dealer_side='short', dealer_book=288)   # продали 288 стрэддлов на всех (короткая гамма)
+MarketConfig(dealer_side='long', dealer_book=288)    # купили (длинная гамма)
+MarketConfig(dealer_side='none')                     # книга пуста, дилеры не торгуют
+```
+
+Каждый дилер держит лестницу стрэддлов около денег (новый каждые 15 шагов, срок 60, закрытие за 5 шагов до экспирации), каждый шаг считает дельту и гамму книги по Блэку–Шоулзу и рыночной заявкой держит позицию дельта-нейтральной. Журнал дилера — `dealer.history`; гамма всей книги по шагам — `dealer_gamma(market)`, поток дилеров — `dealer_flow(market)`. Размер книги 288 — временный, для отладки; окончательный n₀ считается по правилу из prereg после калибровки.
 
 ## Журнал потока заявок
 
@@ -50,11 +64,12 @@ info.prices[t + 1] - info.prices[t]   # изменение цены, котор�
 | Путь | Что | Кто |
 |------|-----|-----|
 | `AgentBasedModel/` | ядро модели: стакан, агенты, симулятор | A |
-| `AgentBasedModel/builder.py` | сборка рынка проекта: 100 агентов, кольцо чартистов, параметры | A |
+| `AgentBasedModel/agents/dealer.py` | дилер опционов: лестница стрэддлов и дельта-хедж | A |
+| `AgentBasedModel/builder.py` | сборка рынка проекта: 112 агентов (из них 12 дилеров), кольцо чартистов, параметры | A |
 | `options/` | Блэк–Шоулз (цена, дельта, гамма колла, пута, стрэддла) и историческая волатильность для дилера | A |
-| `scripts/` | пробный запуск и отладочная развёртка | A |
+| `scripts/` | пробный запуск, отладочная развёртка, проверка механизма | A |
 | `tests/` | тесты | все, каждый к своим модулям |
 | `docs/` | prereg и отладочные рисунки | все |
 
-Дальше по плану появятся дилер (A), `calibration/` и `frey/` (B), `experiments/` и `analysis/` (C).
+Дальше по плану появятся `calibration/` и `frey/` (B), `experiments/` и `analysis/` (C).
 
