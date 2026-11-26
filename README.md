@@ -9,11 +9,11 @@
 Нужен Python 3.11 или новее. На macOS 27 scipy для Python 3.10 не загружается (ошибка `_spropack ... zero-fill section type`), поэтому старое окружение курсовой не подходит.
 
 ```bash
-python3.12 -m venv .venv
-.venv/bin/pip install numpy scipy pandas matplotlib statsmodels tqdm seaborn pytest
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 ```
 
-Если Python 3.12 нет, его можно поставить через `uv` (`pip install uv`, затем `uv python install 3.12` и `uv venv --python 3.12 .venv`) или с python.org. Точные версии пакетов зафиксирует `requirements.txt` (задача C-1).
+На Windows: `.venv\Scripts\pip install -r requirements.txt`. Версии в `requirements.txt` закреплены и ставятся готовыми колёсами на Python 3.11–3.14 (macOS arm64 и x86_64, Windows, Linux), ничего не компилируется. Если подходящего Python нет, его можно поставить через `uv` (`pip install uv`, затем `uv python install 3.12` и `uv venv --python 3.12 .venv`) или с python.org.
 
 ## VS Code
 
