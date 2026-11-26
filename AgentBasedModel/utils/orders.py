@@ -87,6 +87,10 @@ class OrderIter:
     def __init__(self, order_list):
         self.order = order_list.first
 
+    def __iter__(self):
+        # An iterator must return itself; Python 3.13 checks this inside generator expressions
+        return self
+
     def __next__(self) -> Order:
         if self.order:
             next_order = self.order
