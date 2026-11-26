@@ -59,6 +59,35 @@ info.flows[t]                 # {'Random': 3, 'Chartist': -5, ...} за шаг t
 info.prices[t + 1] - info.prices[t]   # изменение цены, которое этот поток вызвал
 ```
 
+## Эксперименты и анализ
+
+Все параметры прогонов — в `experiments/config.py`: сетка J, длина прогона и burn-in, число репликаций, размеры книги, параметры гистерезиса и анализа. Сид каждого прогона — функция от (конфигурация, размер книги, точка сетки, репликация) по формуле из prereg, поэтому любой прогон повторяется, а счёт можно делить между ноутбуками и потом сливать CSV.
+
+n₀, J_fix и J_ref считаются по правилам prereg после калибровки и пока не заданы: полномасштабные прогоны без них не запускаются. Отладочные прогоны идут с предварительными значениями и отдельным потоком сидов.
+
+```bash
+python experiments/run_sweep.py --scale debug --reps 2 --grid-step 0.5 --steps 600 --burn-in 200   # проверка
+python experiments/run_sweep.py --scale main            # основной эксперимент: 3 × 21 × 30 прогонов
+python experiments/run_sweep.py --scale sensitivity     # + ещё 4 размера книги
+python experiments/run_sweep.py --scale main --configs short   # только часть, например на другом ноутбуке
+python experiments/run_hysteresis.py --scale main       # петли гистерезиса для В2
+python experiments/pilot.py                             # пилот всего конвейера и замер времени: docs/pilot.md
+python analysis/make_figures.py                         # рисунки F4–F8 из results/summary/
+```
+
+Каждый прогон записывается в CSV сразу после окончания (`results/summary/sweep.csv`, `results/summary/hysteresis.csv`), повторный запуск пропускает готовое. Прерванные прогоны записываются с шагом остановки, а недостающие репликации добавляются по правилам замены из prereg (раздел 7).
+
+Анализ:
+
+```python
+from analysis import susceptibility as sus, stats_tests as st
+
+df = sus.load_sweep('results/summary/sweep.csv')
+jc = sus.jc_table(df)                       # J_c каждой репликации: argmax χ(J) + парабола, флаг края
+report = st.main_hypothesis_test({c: jc[jc.config == c].jc for c in ('short', 'none', 'long')})
+print(report.to_markdown())                 # H0/H1, статистика, p, размеры эффекта с ДИ, вывод
+```
+
 ## Структура
 
 | Путь | Что | Кто |
@@ -68,8 +97,11 @@ info.prices[t + 1] - info.prices[t]   # изменение цены, котор�
 | `AgentBasedModel/builder.py` | сборка рынка проекта: 112 агентов (из них 12 дилеров), кольцо чартистов, параметры | A |
 | `options/` | Блэк–Шоулз (цена, дельта, гамма колла, пута, стрэддла) и историческая волатильность для дилера | A |
 | `scripts/` | пробный запуск, отладочная развёртка, проверка механизма | A |
+| `experiments/` | параметры и сиды, развёртки по J, гистерезис, пилот конвейера | C |
+| `analysis/` | χ(J) и J_c, тесты (Джонкхир–Терпстра, Манн–Уитни, Холм, бутстрэп), рисунки | C |
+| `results/summary/` | сводные CSV полных прогонов (в git) | C |
 | `tests/` | тесты | все, каждый к своим модулям |
-| `docs/` | prereg и отладочные рисунки | все |
+| `docs/` | prereg, отладочные рисунки, пилот | все |
 
-Дальше по плану появятся `calibration/` и `frey/` (B), `experiments/` и `analysis/` (C).
+Дальше по плану появятся `calibration/` и `frey/` (B).
 
