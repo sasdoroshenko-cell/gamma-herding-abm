@@ -15,6 +15,7 @@ Output: results/pilot/ (tables and figures, not in git), docs/pilot.md and docs/
 import argparse
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -76,6 +77,7 @@ def main():
     parser.add_argument('--workers', type=int, default=os.cpu_count())
     args = parser.parse_args()
     code = git_state()   # state of the code when the pilot starts, before it writes its own files
+    shutil.rmtree(OUT, ignore_errors=True)   # the pilot always starts from scratch: its tables are not kept
     os.makedirs(OUT, exist_ok=True)
     grid = list(range(0, len(C.J_GRID), round(args.grid_step / C.J_STEP)))
     n0 = args.book

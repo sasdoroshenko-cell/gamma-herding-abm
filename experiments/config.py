@@ -53,6 +53,7 @@ HYST_J_INDEX = 99        # seed slot of the hysteresis runs: not a point of the 
 # ---------------------------------------------------------------- measurements written for every run
 FVS_VOLUMES = (10, 20, 50)   # Q for the fixed volume spread (lambda estimate, prereg section 3)
 FVS_EVERY = 10               # the book is measured every 10 steps after burn-in
+SIGMA_HORIZON = 10           # sigma of non-overlapping 10-step log returns: secondary analysis of H1
 
 # ---------------------------------------------------------------- analysis (prereg, section 6)
 ALPHA = 0.05

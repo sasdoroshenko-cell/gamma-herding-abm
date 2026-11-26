@@ -25,7 +25,7 @@ import math
 import os
 import sys
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, replace
 from multiprocessing import Pool
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -37,11 +37,21 @@ from experiments import config as C  # noqa: E402
 from experiments.measures import fixed_volume_spread, run_summary, magnetisation_signed  # noqa: E402
 
 KEY = ('config', 'size_index', 'j_index', 'rep')
-PARAMS = ('J', 'book', 'steps', 'burn_in', 'seed')
+PARAMS = ('J', 'book', 'steps', 'burn_in', 'seed', 'overrides')
 FIELDS = (KEY + PARAMS + ('failed_at', 'runtime_s',
-          'mean_abs_m', 'var_abs_m', 'chi', 'mean_m', 'sigma', 'kurtosis', 'mean_abs_return', 'spread')
+          'mean_abs_m', 'var_abs_m', 'chi', 'mean_m', 'sigma', f'sigma_{C.SIGMA_HORIZON}', 'acf1', 'kurtosis',
+          'mean_abs_return', 'spread', 'kappa')
           + tuple(f'fvs_{q}' for q in C.FVS_VOLUMES)
           + ('dealer_share', 'dealer_flow_abs', 'dealer_gamma', 'corr_flow_past_move'))
+
+
+def format_overrides(values: dict) -> str:
+    """MarketConfig fields that differ from config.BASE, e.g. {'a2': 30} -> 'a2=30'."""
+    return ';'.join(f'{k}={v:g}' for k, v in sorted(values.items()))
+
+
+def parse_overrides(text: str) -> dict:
+    return {k: float(v) for k, v in (item.split('=') for item in text.split(';') if item)}
 
 
 @dataclass(frozen=True)
@@ -56,6 +66,7 @@ class Task:
     burn_in: int
     seed: int
     series_path: str = ''   # if set, the full time series of the run are saved there (.npz)
+    overrides: str = ''     # MarketConfig fields that differ from config.BASE (power checks only)
 
     @property
     def key(self):
@@ -63,16 +74,18 @@ class Task:
 
 
 def make_task(config, size_index, j_index, rep, n0, steps=C.STEPS, burn_in=C.BURN_IN, debug=False,
-              series_path=''):
+              series_path='', overrides=''):
     return Task(config=config, size_index=size_index, j_index=j_index, rep=rep, J=C.J_GRID[j_index],
                 book=C.book_size(config, size_index, n0), steps=steps, burn_in=burn_in,
-                seed=C.seed(config, size_index, j_index, rep, debug=debug), series_path=series_path)
+                seed=C.seed(config, size_index, j_index, rep, debug=debug), series_path=series_path,
+                overrides=overrides)
 
 
 def simulate(task: Task) -> dict:
     """Run one simulation and return its row for the CSV."""
     t0 = time.perf_counter()
-    market = build_market(C.market_config(task.config, task.J, task.book), seed=task.seed)
+    cfg = replace(C.market_config(task.config, task.J, task.book), **parse_overrides(task.overrides))
+    market = build_market(cfg, seed=task.seed)
     sim = market.simulator
     fvs = {q: [] for q in C.FVS_VOLUMES}
     failed_at = None
@@ -91,7 +104,7 @@ def simulate(task: Task) -> dict:
     row = {k: getattr(task, k) for k in KEY + PARAMS}
     row['failed_at'] = '' if failed_at is None else failed_at
     if failed_at is None:
-        row.update(run_summary(market, task.burn_in, task.steps, fvs))
+        row.update(run_summary(market, task.burn_in, task.steps, fvs, C.SIGMA_HORIZON))
     if task.series_path:
         save_series(market, task.series_path)
     row['runtime_s'] = round(time.perf_counter() - t0, 3)
@@ -139,6 +152,12 @@ def check_compatible(rows, tasks):
 
 def run_tasks(tasks, path, workers=None, progress=True) -> list:
     """Run the tasks that are not yet in `path`, appending each row as soon as it is ready."""
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        with open(path, newline='') as f:
+            header = next(csv.reader(f))
+        if header != list(FIELDS):
+            raise RuntimeError(f"{path} was written with other columns (an older version of the runner). "
+                               f"Use another --out or delete the file.")
     rows = read_rows(path)
     check_compatible(rows, tasks)
     done = {tuple(r[k] for k in KEY) for r in rows}

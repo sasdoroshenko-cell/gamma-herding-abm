@@ -177,3 +177,46 @@ def test_fixed_volume_spread_on_a_known_book():
     sell = (5 * 99.8 + 5 * 99.0) / 10
     assert fixed_volume_spread(exchange, 10) == pytest.approx(buy - sell)
     assert fixed_volume_spread(exchange, 16) != fixed_volume_spread(exchange, 16)  # NaN: not enough depth
+
+
+# ---------------------------------------------------------------- price channel, horizon sigma, overrides
+
+def test_price_channel_recovers_a_known_slope():
+    from experiments.measures import price_channel
+    rng = np.random.default_rng(0)
+    m = rng.uniform(-1, 1, 5000)
+    r = 4e-4 * m + rng.normal(0, 1e-3, 5000)
+    assert price_channel(m, r, a2=1.0, v1=0.1) == pytest.approx(10 * 4e-4, rel=0.1)
+    assert price_channel(m, r, a2=30.0, v1=0.1) == pytest.approx(300 * 4e-4, rel=0.1)
+    assert price_channel(np.zeros(10), r[:10], 1.0, 0.1) != price_channel(np.zeros(10), r[:10], 1.0, 0.1)  # NaN
+
+
+def test_horizon_volatility_uses_non_overlapping_returns():
+    from experiments.measures import horizon_volatility
+    prices = 100 * np.exp(np.cumsum(np.r_[0, np.tile([0.01, -0.01], 50)]))   # returns alternate every step
+    assert horizon_volatility(prices, 2) == pytest.approx(0.0, abs=1e-12)   # bounce cancels over 2 steps
+    assert horizon_volatility(prices, 1) > 0.009
+
+
+def test_run_row_has_kappa_and_horizon_sigma():
+    row = rs.simulate(small_task(config='none'))
+    assert row['kappa'] == row['kappa'] and row[f'sigma_{C.SIGMA_HORIZON}'] > 0 and -1 <= row['acf1'] <= 1
+
+
+def test_overrides_change_the_market_and_are_checked_on_resume(tmp_path):
+    base = small_task(config='none', steps=150, burn_in=50)
+    strong = rs.Task(**{**base.__dict__, 'overrides': rs.format_overrides({'a2': 30})})
+    assert rs.parse_overrides(strong.overrides) == {'a2': 30.0}
+    a, b = rs.simulate(base), rs.simulate(strong)
+    assert a['mean_abs_m'] != b['mean_abs_m']        # same seed, stronger price term: another run
+    path = str(tmp_path / 'sweep.csv')
+    rs.run_tasks([base], path, workers=1, progress=False)
+    with pytest.raises(RuntimeError):
+        rs.run_tasks([strong], path, workers=1, progress=False)
+
+
+def test_file_with_old_columns_is_refused(tmp_path):
+    path = tmp_path / 'sweep.csv'
+    path.write_text('config,size_index,j_index,rep,J\nnone,2,0,0,0.0\n')
+    with pytest.raises(RuntimeError):
+        rs.run_tasks([small_task()], str(path), workers=1, progress=False)

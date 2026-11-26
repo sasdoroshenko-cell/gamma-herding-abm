@@ -147,14 +147,15 @@ def protocol_point(df_none: pd.DataFrame, rule: str) -> float:
 
 
 def volatility_sample(df: pd.DataFrame, j_fix: float, size_index: int = C.BASE_SIZE,
-                      n_reps: int = C.N_REPS) -> pd.DataFrame:
+                      n_reps: int = C.N_REPS, column: str = 'sigma') -> pd.DataFrame:
     """
     Sample for hypothesis H1: sigma of the first n_reps finished runs at J = J_fix for every
     configuration, in the order of replication numbers (a failed run is replaced by the next seed).
+    column='sigma' is the one-step sigma of the prereg; f'sigma_{C.SIGMA_HORIZON}' the secondary analysis.
     """
     d = df[(df['size_index'] == size_index) & (np.abs(df['J'] - j_fix) < 1e-9) & ~df['failed']]
     return (d.sort_values('rep').groupby('config', group_keys=False).head(n_reps)
-            [['config', 'rep', 'seed', 'sigma']].reset_index(drop=True))
+            [['config', 'rep', 'seed', column]].reset_index(drop=True))
 
 
 def load_hysteresis(path) -> pd.DataFrame:

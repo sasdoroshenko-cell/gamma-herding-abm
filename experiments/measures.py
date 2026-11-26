@@ -77,7 +77,29 @@ def dealer_stats(market: Market, start: int, stop: int) -> dict:
     }
 
 
-def run_summary(market: Market, burn_in: int, steps: int, fvs_samples: dict) -> dict:
+def price_channel(m: np.ndarray, r: np.ndarray, a2: float, v1: float) -> float:
+    """
+    Strength of the price channel in the chartists' field, kappa = (a2 / v1) * b, where b is the
+    least-squares slope of the log return r_t = log p_{t+1} - log p_t on the magnetisation m_t.
+    The price term of the field, (a2 / v1) * dp / p, then contains kappa * m: herding pushes the
+    price, and the price trend feeds back into the field like an extra global coupling next to
+    a1 * x. Dealers act on herding only through this channel. NaN if m does not vary.
+    """
+    m, r = np.asarray(m, dtype=float), np.asarray(r, dtype=float)
+    if len(m) < 3 or m.var() == 0:
+        return math.nan
+    b = np.cov(m, r, ddof=0)[0, 1] / m.var()
+    return float(a2 / v1 * b)
+
+
+def horizon_volatility(prices, horizon: int) -> float:
+    """Standard deviation of non-overlapping log returns over `horizon` steps."""
+    p = np.asarray(prices, dtype=float)[::horizon]
+    r = np.diff(np.log(p))
+    return float(r.std(ddof=1)) if len(r) > 1 else math.nan
+
+
+def run_summary(market: Market, burn_in: int, steps: int, fvs_samples: dict, horizon: int = 10) -> dict:
     """
     Summary statistics of one finished run over the steps burn_in..steps-1 (prereg, sections 4-5):
     mean and variance of |m|, chi = N_ch * Var(|m|), sigma of log returns and the rest of the journal.
@@ -89,6 +111,7 @@ def run_summary(market: Market, burn_in: int, steps: int, fvs_samples: dict) -> 
     r = np.diff(np.log(prices))
     spreads = [s['ask'] - s['bid'] for s in info.spreads[burn_in:steps] if s]
     n_ch = len(market.chartists)
+    cfg = market.config
 
     out = {
         'mean_abs_m': float(abs_m.mean()),
@@ -96,9 +119,12 @@ def run_summary(market: Market, burn_in: int, steps: int, fvs_samples: dict) -> 
         'chi': float(n_ch * abs_m.var()),
         'mean_m': float(m.mean()),
         'sigma': float(r.std(ddof=1)),
+        f'sigma_{horizon}': horizon_volatility(prices, horizon),
+        'acf1': float(np.corrcoef(r[1:], r[:-1])[0, 1]) if len(r) > 2 and r.std() > 0 else math.nan,
         'kurtosis': float(((r - r.mean()) ** 4).mean() / r.var() ** 2 - 3) if r.var() > 0 else math.nan,
         'mean_abs_return': float(np.abs(r).mean()),
         'spread': float(np.mean(spreads)) if spreads else math.nan,
+        'kappa': price_channel(m[:-1], r, cfg.a2, cfg.v1),
     }
     for q, values in fvs_samples.items():
         finite = [v for v in values if not math.isnan(v)]

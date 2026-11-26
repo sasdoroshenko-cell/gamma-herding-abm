@@ -335,9 +335,13 @@ def main_hypothesis_test(jc: dict, n_perm=C.N_PERM, n_boot=C.N_BOOT, rng=None) -
         effects=effects, extra={'z (нормальное приближение)': jt.z, 'p (нормальное приближение)': jt.p_asymptotic}, ordered=True)
 
 
-def volatility_test(sigma: dict, n_perm=C.N_PERM, n_boot=C.N_BOOT, rng=None) -> HypothesisReport:
-    """Hypothesis H1: sigma(long) <= sigma(none) <= sigma(short) at J = J_fix."""
-    rng = _rng(rng, 2)
+def volatility_test(sigma: dict, n_perm=C.N_PERM, n_boot=C.N_BOOT, rng=None, horizon: int = 1) -> HypothesisReport:
+    """
+    Hypothesis H1: sigma(long) <= sigma(none) <= sigma(short) at J = J_fix.
+    horizon = 1 is the test of the prereg; horizon > 1 the secondary analysis on non-overlapping
+    horizon-step returns (outside the Holm family).
+    """
+    rng = _rng(rng, 2 if horizon == 1 else 4)
     s, n, l = _samples(sigma, ORDER)
     jt = jonckheere_terpstra([l, n, s], n_perm, rng)
     effects = [
@@ -345,7 +349,9 @@ def volatility_test(sigma: dict, n_perm=C.N_PERM, n_boot=C.N_BOOT, rng=None) -> 
         bootstrap_ci(median_ratio, [n, l], n_boot, rng=rng, name='med σ(none) / med σ(long)'),
     ]
     return HypothesisReport(
-        key='В1', quantity='σ лог-доходностей при J = J_fix',
+        key='В1' if horizon == 1 else f'В1, вторичный анализ ({horizon} шагов)',
+        quantity='σ лог-доходностей при J = J_fix' if horizon == 1 else
+                 f'σ непересекающихся {horizon}-шаговых лог-доходностей при J = J_fix',
         direction='σ(long) < σ(none) < σ(short)',
         h0='распределения σ в трёх конфигурациях одинаковы',
         h1='σ(long) ≤ σ(none) ≤ σ(short), хотя бы одно неравенство строгое',
