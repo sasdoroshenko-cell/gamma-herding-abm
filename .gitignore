@@ -38,3 +38,10 @@ results/**/*.png
 # Debug figures and tables referenced in docs/ (the project plan asks for them in git)
 !docs/*.png
 !docs/*.csv
+
+# Summary tables of the full runs: small, and the lecturer checks the numbers without rerunning
+!results/summary/*.csv
+
+# Full time series of single runs and debug runs: large and reproducible from the seeds
+results/series/
+results/debug/
