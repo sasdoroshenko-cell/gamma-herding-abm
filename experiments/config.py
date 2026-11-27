@@ -71,7 +71,7 @@ def seed(config: str, size_index: int, j_index: int, rep: int, debug: bool = Fal
     Seed of one simulation (prereg, section 4):
         1 000 000 * (configuration) + 10 000 * (book size) + 100 * (point of the J grid) + (replication)
     Configurations are numbered short = 1, none = 2, long = 3; book sizes and grid points from 0;
-    replications from 0 (0..29 are the main ones, 30 and later replace failed ones).
+    replications from 0 (0..N_REPS-1 are the main ones, later numbers replace failed ones).
     Hysteresis runs use j_index = HYST_J_INDEX.
     """
     if config not in CONFIG_INDEX:
@@ -104,6 +104,19 @@ def book_size(config: str, size_index: int, n0: float) -> float:
 def market_config(config: str, J: float, book: float) -> MarketConfig:
     """MarketConfig of one run: BASE with the coupling J and the dealers' book."""
     return replace(BASE, J=J, dealer_side=config, dealer_book=book if config != 'none' else 0.0)
+
+
+def model_id(cfg: MarketConfig) -> str:
+    """
+    Short fingerprint of every model parameter except those that vary inside one experiment
+    (J, dealer side and book). Written with every run, so runs of different models (e.g. before and
+    after calibration) are never mixed in one file or one analysis.
+    """
+    import hashlib
+    import json
+    from dataclasses import asdict
+    fixed = {k: v for k, v in asdict(cfg).items() if k not in ('J', 'dealer_side', 'dealer_book')}
+    return hashlib.sha1(json.dumps(fixed, sort_keys=True).encode()).hexdigest()[:10]
 
 
 def require_frozen():

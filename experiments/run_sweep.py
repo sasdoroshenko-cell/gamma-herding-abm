@@ -34,11 +34,11 @@ if ROOT not in sys.path:
 
 from AgentBasedModel.builder import build_market  # noqa: E402
 from experiments import config as C  # noqa: E402
-from experiments.measures import fixed_volume_spread, run_summary, magnetisation_signed  # noqa: E402
+from experiments.measures import fixed_volume_spread, run_summary, magnetisation_signed, failure_reason  # noqa: E402
 
 KEY = ('config', 'size_index', 'j_index', 'rep')
-PARAMS = ('J', 'book', 'steps', 'burn_in', 'seed', 'overrides')
-FIELDS = (KEY + PARAMS + ('failed_at', 'runtime_s',
+PARAMS = ('J', 'book', 'steps', 'burn_in', 'seed', 'overrides', 'model')
+FIELDS = (KEY + PARAMS + ('failed_at', 'error', 'runtime_s',
           'mean_abs_m', 'var_abs_m', 'chi', 'mean_m', 'sigma', f'sigma_{C.SIGMA_HORIZON}', 'acf1', 'kurtosis',
           'mean_abs_return', 'spread', 'kappa')
           + tuple(f'fvs_{q}' for q in C.FVS_VOLUMES)
@@ -72,6 +72,13 @@ class Task:
     def key(self):
         return self.config, self.size_index, self.j_index, self.rep
 
+    def market_config(self):
+        return replace(C.market_config(self.config, self.J, self.book), **parse_overrides(self.overrides))
+
+    @property
+    def model(self):
+        return C.model_id(self.market_config())
+
 
 def make_task(config, size_index, j_index, rep, n0, steps=C.STEPS, burn_in=C.BURN_IN, debug=False,
               series_path='', overrides=''):
@@ -84,11 +91,10 @@ def make_task(config, size_index, j_index, rep, n0, steps=C.STEPS, burn_in=C.BUR
 def simulate(task: Task) -> dict:
     """Run one simulation and return its row for the CSV."""
     t0 = time.perf_counter()
-    cfg = replace(C.market_config(task.config, task.J, task.book), **parse_overrides(task.overrides))
-    market = build_market(cfg, seed=task.seed)
+    market = build_market(task.market_config(), seed=task.seed)
     sim = market.simulator
     fvs = {q: [] for q in C.FVS_VOLUMES}
-    failed_at = None
+    failed_at, error = None, ''
     try:
         sim.simulate(task.burn_in, silent=True)
         done = task.burn_in
@@ -98,11 +104,13 @@ def simulate(task: Task) -> dict:
             chunk = min(C.FVS_EVERY, task.steps - done)
             sim.simulate(chunk, silent=True)
             done += chunk
-    except Exception:
-        failed_at = len(sim.info.prices)   # step at which the run stopped
+    except Exception as exc:
+        error = failure_reason(exc)          # a bug in the code is raised here, not counted as a failed run
+        failed_at = len(sim.info.prices)     # step at which the run stopped
 
     row = {k: getattr(task, k) for k in KEY + PARAMS}
     row['failed_at'] = '' if failed_at is None else failed_at
+    row['error'] = error
     if failed_at is None:
         row.update(run_summary(market, task.burn_in, task.steps, fvs, C.SIGMA_HORIZON))
     if task.series_path:
@@ -137,7 +145,18 @@ def read_rows(path) -> list:
 
 
 def check_compatible(rows, tasks):
-    """Refuse to mix runs with different parameters in one file (e.g. a provisional and the final n0)."""
+    """
+    Refuse to mix runs with different parameters in one file: a task whose key is already in the
+    file must have the same parameters, and every run of a file must share the run length and
+    the model (e.g. not a provisional and a calibrated model, or two values of a2).
+    """
+    file_level = {(r['steps'], r['burn_in'], r['model']) for r in rows}
+    if len(file_level) > 1:
+        raise RuntimeError(f"the file already mixes run lengths or models: {sorted(file_level)}")
+    for t in tasks:
+        if file_level and (t.steps, t.burn_in, t.model) not in file_level:
+            raise RuntimeError(f"{t.key}: model {t.model} / {t.steps} steps differ from the runs in the file "
+                               f"{sorted(file_level)}. Use another --out or delete the file.")
     done = {tuple(r[k] for k in KEY): r for r in rows}
     for t in tasks:
         r = done.get(t.key)
@@ -228,7 +247,9 @@ def top_up_tasks(rows, configs, sizes, grid_indices, n_reps, n0, j_fix_index=Non
             rep = n_reps
             while n_valid < n_reps:   # main hypothesis: whole replications
                 if rep > C.MAX_REP:
-                    raise RuntimeError(f"{config}, size {size}: seed stream exhausted")
+                    print(f"  ВНИМАНИЕ: {config}, размер {size}: поток сидов исчерпан, валидных репликаций "
+                          f"{n_valid} из {n_reps}")
+                    break
                 if status.get(rep) != 'valid' and status.get(rep) != 'replaced':
                     tasks += [make_task(config, size, j, rep, n0, steps, burn_in, debug) for j in grid_indices]
                     n_valid += 1   # optimistic: if it fails again, the next pass adds another one
@@ -242,7 +263,8 @@ def top_up_tasks(rows, configs, sizes, grid_indices, n_reps, n0, j_fix_index=Non
                 rep = n_reps
                 while ok < n_reps:
                     if rep > C.MAX_REP:
-                        raise RuntimeError(f"{config}: seed stream at J_fix exhausted")
+                        print(f"  ВНИМАНИЕ: {config}: поток сидов при J_fix исчерпан")
+                        break
                     if rep not in existing and rep not in scheduled:
                         tasks.append(make_task(config, size, j_fix_index, rep, n0, steps, burn_in, debug))
                         ok += 1
@@ -269,7 +291,15 @@ def sweep(configs, sizes, grid_indices, n_reps, n0, path, workers=None, steps=C.
             break
         print(f"замены по правилам prereg: {len(extra)} прогонов")
         run_tasks(extra, path, workers)
-    return read_rows(path)
+    rows = read_rows(path)
+    for c in configs:
+        for s in sizes:
+            status = replication_status(rows, c, s, grid_indices)
+            n_valid = sum(v == 'valid' for v in status.values())
+            if n_valid < n_reps:
+                print(f"  ВНИМАНИЕ: {c}, размер {s}: валидных репликаций {n_valid} из {n_reps} "
+                      f"после замен — это указывается в отчёте")
+    return rows
 
 
 def report_failures(rows):

@@ -77,10 +77,23 @@ def dealer_stats(market: Market, start: int, stop: int) -> dict:
     }
 
 
+# Errors that mean a bug in the code, not a market that broke down: they stop the experiment
+PROGRAMMING_ERRORS = (TypeError, AttributeError, NameError, ImportError, AssertionError, KeyError)
+
+
+def failure_reason(exc: Exception) -> str:
+    """Short description of why a run stopped, written to the CSV; programming errors are raised."""
+    if isinstance(exc, PROGRAMMING_ERRORS):
+        raise exc
+    return f"{type(exc).__name__}: {exc}"[:120]
+
+
 def price_channel(m: np.ndarray, r: np.ndarray, a2: float, v1: float) -> float:
     """
     Strength of the price channel in the chartists' field, kappa = (a2 / v1) * b, where b is the
-    least-squares slope of the log return r_t = log p_{t+1} - log p_t on the magnetisation m_t.
+    least-squares slope of the log return r_t = log p_{t+1} - log p_t on the magnetisation of the
+    chartists who traded during step t. The simulator records sentiments at the start of a step,
+    after the previous step's revision, so that magnetisation is the one recorded at step t + 1.
     The price term of the field, (a2 / v1) * dp / p, then contains kappa * m: herding pushes the
     price, and the price trend feeds back into the field like an extra global coupling next to
     a1 * x. Dealers act on herding only through this channel. NaN if m does not vary.
@@ -101,8 +114,10 @@ def horizon_volatility(prices, horizon: int) -> float:
 
 def run_summary(market: Market, burn_in: int, steps: int, fvs_samples: dict, horizon: int = 10) -> dict:
     """
-    Summary statistics of one finished run over the steps burn_in..steps-1 (prereg, sections 4-5):
+    Summary statistics of one finished run over the recorded steps burn_in..steps-1 (prereg, sections 4-5):
     mean and variance of |m|, chi = N_ch * Var(|m|), sigma of log returns and the rest of the journal.
+    Recorded step t is the state at the start of step t + 1 (1-based), so indices 500..1499 are the
+    steps 501-1500 of the prereg; sigma uses the 999 returns between these 1000 recorded prices.
     """
     info = market.simulator.info
     m = magnetisation_signed(market, burn_in, steps)
@@ -124,7 +139,7 @@ def run_summary(market: Market, burn_in: int, steps: int, fvs_samples: dict, hor
         'kurtosis': float(((r - r.mean()) ** 4).mean() / r.var() ** 2 - 3) if r.var() > 0 else math.nan,
         'mean_abs_return': float(np.abs(r).mean()),
         'spread': float(np.mean(spreads)) if spreads else math.nan,
-        'kappa': price_channel(m[:-1], r, cfg.a2, cfg.v1),
+        'kappa': price_channel(m[1:], r, cfg.a2, cfg.v1),   # r_t is moved by the sentiments recorded at t + 1
     }
     for q, values in fvs_samples.items():
         finite = [v for v in values if not math.isnan(v)]

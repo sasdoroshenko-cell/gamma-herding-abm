@@ -14,6 +14,7 @@ Rules of the prereg applied here:
 
 Input is the table written by experiments/run_sweep.py (one row per run).
 """
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -23,8 +24,10 @@ from experiments import config as C
 
 
 def load_sweep(path) -> pd.DataFrame:
-    df = pd.read_csv(path, dtype={'config': str})
+    df = pd.read_csv(path, dtype={'config': str, 'model': str, 'error': str})
     df['failed'] = df['failed_at'].notna()
+    if 'model' in df and df['model'].nunique() > 1:
+        raise ValueError(f"{path} mixes runs of different models: {sorted(df['model'].unique())}")
     return df
 
 
@@ -49,8 +52,9 @@ class Peak:
     jc: float          # estimate of J_c
     j_argmax: float    # grid point with the largest chi
     chi_max: float
-    edge: bool         # maximum at J = grid minimum or maximum
+    edge: bool         # maximum at the first or last finished point (grid edge, or its neighbour failed)
     refined: bool      # J_c is the vertex of a parabola, not a grid point
+    neighbour_failed: bool = False   # flagged because a neighbouring run failed, not at the grid edge
 
 
 def critical_coupling(J, chi, grid_min=C.J_GRID[0], grid_max=C.J_GRID[-1]) -> Peak:
@@ -64,9 +68,11 @@ def critical_coupling(J, chi, grid_min=C.J_GRID[0], grid_max=C.J_GRID[-1]) -> Pe
     J, chi = J[order], chi[order]
     i = int(np.argmax(chi))    # the first maximum if several are equal
     j_max = float(J[i])
-    edge = abs(j_max - grid_min) < 1e-9 or abs(j_max - grid_max) < 1e-9
-    if edge or i == 0 or i == len(J) - 1:   # at the edge of the grid, or neighbours missing
-        return Peak(j_max, j_max, float(chi[i]), edge, False)
+    grid_edge = abs(j_max - grid_min) < 1e-9 or abs(j_max - grid_max) < 1e-9
+    if grid_edge or i == 0 or i == len(J) - 1:
+        # J_c cannot be refined: at the edge of the grid (prereg, section 7), or a neighbouring run failed;
+        # both are flagged as edge peaks, so they are counted and left out in the exploratory recheck
+        return Peak(j_max, j_max, float(chi[i]), True, False, neighbour_failed=not grid_edge)
     jc = parabolic_vertex(J[i - 1:i + 2], chi[i - 1:i + 2])
     return Peak(jc, j_max, float(chi[i]), False, True)
 
@@ -85,24 +91,30 @@ def replication_table(df: pd.DataFrame, n_grid: int = None, max_failed: int = C.
 
 
 def jc_table(df: pd.DataFrame, n_reps: int = C.N_REPS, max_failed: int = C.MAX_FAILED_POINTS,
-             grid=None) -> pd.DataFrame:
+             grid=None, size_index=C.BASE_SIZE) -> pd.DataFrame:
     """
-    J_c of the replications that enter the test: for every (config, size_index) the first n_reps
-    valid replications by number. Columns: config, size_index, rep, jc, j_argmax, chi_max, edge,
-    refined, n_failed.
+    J_c of the replications that enter the test: for every configuration the first n_reps valid
+    replications by number, at book size `size_index` (the main experiment by default; None for
+    every size, e.g. the sensitivity analysis, which then has to be split by size_index).
+    Columns: config, size_index, rep, jc, j_argmax, chi_max, edge, refined, neighbour_failed, n_failed.
+    Warns if fewer than n_reps valid replications are available.
     """
     grid = list(C.J_GRID) if grid is None else list(grid)
+    if size_index is not None:
+        df = df[df['size_index'] == size_index]
     reps = replication_table(df, len(grid), max_failed)
     rows = []
     for (config, size), r in reps.groupby(['config', 'size_index']):
         used = r[r['status'] == 'valid'].sort_values('rep').head(n_reps)
+        if len(used) < n_reps:
+            warnings.warn(f"{config}, size {size}: only {len(used)} valid replications of {n_reps}")
         for _, rep in used.iterrows():
             runs = df[(df['config'] == config) & (df['size_index'] == size) & (df['rep'] == rep['rep'])]
             chi = runs['chi'].where(~runs['failed'])
             p = critical_coupling(runs['J'], chi, grid[0], grid[-1])
             rows.append({'config': config, 'size_index': size, 'rep': rep['rep'], 'jc': p.jc,
                          'j_argmax': p.j_argmax, 'chi_max': p.chi_max, 'edge': p.edge, 'refined': p.refined,
-                         'n_failed': rep['n_failed']})
+                         'neighbour_failed': p.neighbour_failed, 'n_failed': rep['n_failed']})
     return pd.DataFrame(rows)
 
 
@@ -154,13 +166,23 @@ def volatility_sample(df: pd.DataFrame, j_fix: float, size_index: int = C.BASE_S
     column='sigma' is the one-step sigma of the prereg; f'sigma_{C.SIGMA_HORIZON}' the secondary analysis.
     """
     d = df[(df['size_index'] == size_index) & (np.abs(df['J'] - j_fix) < 1e-9) & ~df['failed']]
-    return (d.sort_values('rep').groupby('config', group_keys=False).head(n_reps)
-            [['config', 'rep', 'seed', column]].reset_index(drop=True))
+    out = (d.sort_values('rep').groupby('config', group_keys=False).head(n_reps)
+           [['config', 'rep', 'seed', column]].reset_index(drop=True))
+    _warn_short(out, n_reps, 'J_fix')
+    return out
+
+
+def _warn_short(sample: pd.DataFrame, n_reps: int, what: str):
+    for config, n in sample.groupby('config').size().items():
+        if n < n_reps:
+            warnings.warn(f"{config}: only {n} finished runs of {n_reps} ({what})")
 
 
 def load_hysteresis(path) -> pd.DataFrame:
-    df = pd.read_csv(path, dtype={'config': str, 'grid': str})
+    df = pd.read_csv(path, dtype={'config': str, 'grid': str, 'model': str, 'error': str})
     df['failed'] = df['failed_at'].notna()
+    if 'model' in df and df['model'].nunique() > 1:
+        raise ValueError(f"{path} mixes loops of different models: {sorted(df['model'].unique())}")
     return df
 
 
@@ -170,5 +192,7 @@ def hysteresis_sample(df_h: pd.DataFrame, size_index: int = C.BASE_SIZE, n_reps:
     configuration, in the order of replication numbers (a failed run is replaced by the next seed).
     """
     d = df_h[(df_h['size_index'] == size_index) & ~df_h['failed']]
-    return (d.sort_values('rep').groupby('config', group_keys=False).head(n_reps)
-            [['config', 'rep', 'seed', 'area']].reset_index(drop=True))
+    out = (d.sort_values('rep').groupby('config', group_keys=False).head(n_reps)
+           [['config', 'rep', 'seed', 'area']].reset_index(drop=True))
+    _warn_short(out, n_reps, 'hysteresis')
+    return out

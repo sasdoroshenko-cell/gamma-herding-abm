@@ -85,8 +85,9 @@ def test_replication_with_more_than_three_failed_points_is_replaced_by_the_next(
 def test_incomplete_replication_is_not_used():
     df = sweep_frame({0: set(), 1: set()})
     df = df[~((df['rep'] == 1) & (df['j_index'] == 20))]    # rep 1 has not finished its last point
-    jc = sus.jc_table(df, n_reps=30)
-    assert set(jc['rep']) == {0}
+    with pytest.warns(UserWarning, match="only 1 valid replications"):
+        jc = sus.jc_table(df, n_reps=30)
+    assert set(jc["rep"]) == {0}
 
 
 def test_protocol_points_follow_the_prereg_rules():
@@ -100,3 +101,29 @@ def test_volatility_sample_takes_the_first_finished_runs_at_j_fix():
     s = sus.volatility_sample(df, j_fix=1.1, n_reps=3)
     for _, g in s.groupby('config'):
         assert list(g['rep']) == [0, 2, 3]       # rep 1 failed at J = 1.1
+
+
+def test_peak_next_to_a_failed_run_is_flagged():
+    chi = chi_curve(0.02)                 # true peak just above J = 0
+    chi[0] = np.nan                       # the run at J = 0 failed: the maximum is the first finished point
+    p = sus.critical_coupling(GRID, chi)
+    assert p.edge and p.neighbour_failed and not p.refined
+    assert p.jc == pytest.approx(0.1)
+
+
+def test_jc_table_takes_one_book_size():
+    main = sweep_frame({0: set(), 1: set()})
+    other = main.assign(size_index=C.BASE_SIZE + 1)
+    both = pd.concat([main, other], ignore_index=True)
+    jc = sus.jc_table(both, n_reps=2)
+    assert set(jc['size_index']) == {C.BASE_SIZE} and len(jc) == 3 * 2
+    assert len(sus.jc_table(both, n_reps=2, size_index=None)) == 3 * 2 * 2
+
+
+def test_mixed_models_in_one_file_are_refused(tmp_path):
+    df = sweep_frame({0: set()}).assign(model=['a'] * 63)
+    df.loc[0, 'model'] = 'b'
+    path = tmp_path / 'sweep.csv'
+    df.drop(columns='failed').to_csv(path, index=False)
+    with pytest.raises(ValueError):
+        sus.load_sweep(path)

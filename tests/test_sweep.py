@@ -106,6 +106,15 @@ def test_failed_run_is_written_not_dropped(monkeypatch):
     monkeypatch.setattr(Simulator, 'simulate', broken)
     row = rs.simulate(small_task())
     assert row['failed_at'] == 0 and row['chi'] != row['chi']    # step of failure, statistics NaN
+    assert row['error'].startswith('Exception: Price cannot be determined')
+
+
+def test_a_bug_in_the_code_is_raised_not_counted_as_a_failed_run(monkeypatch):
+    def buggy(self, n_iter, silent=False):
+        raise TypeError('unsupported operand')
+    monkeypatch.setattr(Simulator, 'simulate', buggy)
+    with pytest.raises(TypeError):
+        rs.simulate(small_task())
 
 
 # ---------------------------------------------------------------- CSV, resume, replacements
@@ -220,3 +229,40 @@ def test_file_with_old_columns_is_refused(tmp_path):
     path.write_text('config,size_index,j_index,rep,J\nnone,2,0,0,0.0\n')
     with pytest.raises(RuntimeError):
         rs.run_tasks([small_task()], str(path), workers=1, progress=False)
+
+
+def test_changed_model_is_refused_on_resume(tmp_path, monkeypatch):
+    from dataclasses import replace
+    path = str(tmp_path / 'sweep.csv')
+    rs.run_tasks([small_task(steps=120, burn_in=40)], path, workers=1, progress=False)
+    monkeypatch.setattr(C, 'BASE', replace(C.BASE, a2=C.BASE.a2 + 1))   # e.g. calibration changed the model
+    with pytest.raises(RuntimeError):      # the same run with another model
+        rs.run_tasks([small_task(steps=120, burn_in=40)], path, workers=1, progress=False)
+    with pytest.raises(RuntimeError):      # a new run of another model in the same file
+        rs.run_tasks([small_task(j=3, steps=120, burn_in=40)], path, workers=1, progress=False)
+
+
+def test_model_id_ignores_what_varies_inside_an_experiment():
+    a = C.market_config('short', 0.3, 288.0)
+    b = C.market_config('long', 1.7, 72.0)
+    assert C.model_id(a) == C.model_id(b)
+    from dataclasses import replace
+    assert C.model_id(replace(a, mm_softlimit=50)) != C.model_id(a)
+
+
+def test_sentiments_recorded_at_t_plus_1_are_the_ones_that_traded_in_step_t():
+    """The alignment of kappa rests on this: the simulator records the state at the start of a step."""
+    task = small_task(config='none')
+    market = build_market(C.market_config(task.config, task.J, task.book), seed=task.seed)
+    market.simulator.simulate(5, silent=True)
+    after_step_4 = {ch.id: ch.sentiment for ch in market.chartists}   # sentiments that traded in step 4
+    market.simulator.simulate(1, silent=True)
+    assert market.simulator.info.sentiments[5] == after_step_4
+
+
+def test_top_up_stops_with_a_warning_when_the_seed_stream_is_exhausted(capsys):
+    rows = [{'config': 'short', 'size_index': C.BASE_SIZE, 'j_index': j, 'rep': r, 'failed_at': '7'}
+            for r in range(C.MAX_REP + 1) for j in range(4)]       # every replication failed everywhere
+    tasks = rs.top_up_tasks(rows, ['short'], [C.BASE_SIZE], range(4), n_reps=3, n0=288, debug=True)
+    assert tasks == []
+    assert 'исчерпан' in capsys.readouterr().out

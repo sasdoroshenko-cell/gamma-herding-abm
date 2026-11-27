@@ -96,6 +96,8 @@ def main():
     parser.add_argument('--reps', type=int, default=C.N_REPS)
     parser.add_argument('--workers', type=int, default=os.cpu_count())
     args = parser.parse_args()
+    if not 1 <= args.reps <= 100:
+        parser.error('--reps must be 1..100: the seed is offset + 100 * point + replication')
     settings = [tuple(map(float, s.split(':'))) for s in args.settings] if args.settings else list(SETTINGS)
     code = git_state()
     os.makedirs(OUT, exist_ok=True)

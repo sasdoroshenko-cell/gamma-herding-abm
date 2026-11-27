@@ -32,10 +32,10 @@ if ROOT not in sys.path:
 
 from AgentBasedModel.builder import build_market  # noqa: E402
 from experiments import config as C  # noqa: E402
-from experiments.measures import magnetisation_signed  # noqa: E402
+from experiments.measures import magnetisation_signed, failure_reason  # noqa: E402
 
 KEY = ('config', 'size_index', 'rep')
-PARAMS = ('book', 'seed', 'burn_in', 'level_steps', 'discard', 'grid')
+PARAMS = ('book', 'seed', 'burn_in', 'level_steps', 'discard', 'grid', 'model')
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,10 @@ class HysteresisTask:
     @property
     def key(self):
         return self.config, self.size_index, self.rep
+
+    @property
+    def model(self):
+        return C.model_id(C.market_config(self.config, 0.0, self.book))
 
 
 def make_task(config, size_index, rep, n0, grid=None, burn_in=C.HYST_BURN_IN, level_steps=C.HYST_STEP,
@@ -80,7 +84,7 @@ def simulate(task: HysteresisTask) -> dict:
     market = build_market(C.market_config(task.config, 0.0, task.book), seed=task.seed)
     sim = market.simulator
     curves = {}
-    failed_at = None
+    failed_at, error = None, ''
     try:
         sim.simulate(task.burn_in, silent=True)
         for direction, J in levels:
@@ -90,12 +94,14 @@ def simulate(task: HysteresisTask) -> dict:
             sim.simulate(task.level_steps, silent=True)
             m = np.abs(magnetisation_signed(market, start + task.discard, start + task.level_steps))
             curves[f'{direction}_{J:.1f}'] = float(m.mean())
-    except Exception:
+    except Exception as exc:
+        error = failure_reason(exc)
         failed_at = len(sim.info.prices)
 
     row = {'config': task.config, 'size_index': task.size_index, 'rep': task.rep, 'book': task.book,
            'seed': task.seed, 'burn_in': task.burn_in, 'level_steps': task.level_steps, 'discard': task.discard,
-           'grid': ' '.join(str(j) for j in task.grid), 'failed_at': '' if failed_at is None else failed_at}
+           'grid': ' '.join(str(j) for j in task.grid), 'model': task.model,
+           'failed_at': '' if failed_at is None else failed_at, 'error': error}
     cols = curve_columns(task.grid)
     if failed_at is None:
         dJ = js[1] - js[0] if len(js) > 1 else 0.0
@@ -109,8 +115,8 @@ def simulate(task: HysteresisTask) -> dict:
 
 
 def fields(grid):
-    return list(KEY) + ['book', 'seed', 'burn_in', 'level_steps', 'discard', 'grid', 'failed_at', 'runtime_s',
-                        'area'] + curve_columns(grid)
+    return list(KEY) + ['book', 'seed', 'burn_in', 'level_steps', 'discard', 'grid', 'model', 'failed_at', 'error',
+                        'runtime_s', 'area'] + curve_columns(grid)
 
 
 def read_rows(path) -> list:
@@ -132,14 +138,25 @@ def run_tasks(tasks, path, workers=None, progress=True) -> list:
     grid = tasks[0].grid
     if any(t.grid != grid for t in tasks):
         raise ValueError('all tasks of one file must use the same grid')
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        with open(path, newline='') as f:
+            header = next(csv.reader(f))
+        if header != fields(grid):
+            raise RuntimeError(f"{path} was written with other columns or another grid. "
+                               f"Use another --out or delete the file.")
     rows = read_rows(path)
+    # every loop of a file shares the protocol and the model, so the curves and areas are comparable
+    file_level = {(r['burn_in'], r['level_steps'], r['discard'], r['grid'], r['model']) for r in rows}
+    for t in tasks:
+        mine = (t.burn_in, t.level_steps, t.discard, ' '.join(map(str, t.grid)), t.model)
+        if file_level and file_level != {mine}:
+            raise RuntimeError(f"{t.key}: protocol or model differ from the loops in {path}. Use another --out.")
     done = {}
     for r in rows:
         done[(r['config'], r['size_index'], r['rep'])] = r
     for t in tasks:
         r = done.get(t.key)
-        if r is not None and (abs(r['book'] - t.book) > 1e-9 or r['seed'] != t.seed or r['grid'] != ' '.join(map(str, t.grid))
-                              or (r['burn_in'], r['level_steps'], r['discard']) != (t.burn_in, t.level_steps, t.discard)):
+        if r is not None and (abs(r['book'] - t.book) > 1e-9 or r['seed'] != t.seed):
             raise RuntimeError(f"{t.key}: parameters differ from the file {path}. Use another --out.")
     todo = [t for t in dict.fromkeys(tasks) if t.key not in done]
     if not todo:
@@ -187,7 +204,8 @@ def hysteresis(configs, n_reps, n0, path, workers=None, size_index=C.BASE_SIZE, 
             rep = n_reps
             while ok < n_reps:
                 if rep > C.MAX_REP:
-                    raise RuntimeError(f"{c}: seed stream exhausted")
+                    print(f"  ВНИМАНИЕ: {c}: поток сидов исчерпан, готовых петель {ok} из {n_reps}")
+                    break
                 if rep not in mine:
                     extra.append(task(c, rep))
                     ok += 1
