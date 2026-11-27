@@ -45,3 +45,6 @@ results/**/*.png
 # Full time series of single runs and debug runs: large and reproducible from the seeds
 results/series/
 results/debug/
+results/pilot/
+results/power/
+results/kappa_check/
