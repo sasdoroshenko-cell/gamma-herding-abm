@@ -93,7 +93,26 @@ def test_incomplete_replication_is_not_used():
 def test_protocol_points_follow_the_prereg_rules():
     df = sweep_frame({0: set()}, configs=('none',))      # mean |m| = J / 1.25, capped at 1
     assert sus.protocol_point(df, 'fix') == pytest.approx(1.0)   # first J with J / 1.25 >= 0.8 (exactly 0.8 counts)
-    assert sus.protocol_point(df, 'ref') == pytest.approx(0.3)   # last J with J / 1.25 <= 0.3
+    # chi = 5 - (J - 1)^2 / 0.4: half of the maximum is reached only at J = 0
+    assert sus.protocol_point(df, 'ref') == pytest.approx(0.0)
+
+
+def none_frame(chi_of_J):
+    rows = [{'config': 'none', 'J': J, 'chi': chi_of_J(J), 'mean_abs_m': 0.5, 'failed_at': np.nan, 'seed': s}
+            for J in C.J_GRID for s in range(3)]
+    df = pd.DataFrame(rows)
+    df['failed'] = False
+    return df
+
+
+def test_j_ref_is_the_last_point_below_half_of_the_chi_peak():
+    df = none_frame(lambda J: np.exp(-(J - 1.2) ** 2 / (2 * 0.3 ** 2)))   # half maximum at J = 0.85
+    assert sus.protocol_point(df, 'ref') == pytest.approx(0.8)
+
+
+def test_j_ref_falls_back_to_the_start_of_the_grid():
+    df = none_frame(lambda J: np.exp(-(J - 0.2) ** 2 / (2 * 0.5 ** 2)))   # chi above half everywhere left of the peak
+    assert sus.protocol_point(df, 'ref') == pytest.approx(0.0)
 
 
 def test_volatility_sample_takes_the_first_finished_runs_at_j_fix():

@@ -14,9 +14,11 @@ from dataclasses import replace
 
 from AgentBasedModel.builder import MarketConfig
 
-# ---------------------------------------------------------------- model (prereg, section 2)
+# ---------------------------------------------------------------- model (prereg, section 2 and amendment 1)
 # Parameters fixed by the prereg. Calibration (task B-7) adds its parameters here before config-v1.
-BASE = MarketConfig(a1=0.6, a2=1.0, v1=0.1)
+# Amendment 1: a2 = 30 (was 1), chosen without dealers by the power check in docs/power.md: with a2 = 1
+# the price channel through which dealers act on herding is too weak for the main hypothesis to be tested.
+BASE = MarketConfig(a1=0.6, a2=30.0, v1=0.1)
 
 # ---------------------------------------------------------------- configurations (prereg, section 3)
 CONFIGS = ('short', 'none', 'long')
@@ -34,15 +36,16 @@ J_GRID = tuple(round(0.1 * k, 1) for k in range(21))   # 0.0, 0.1, ..., 2.0
 J_STEP = 0.1
 STEPS = 1500
 BURN_IN = 500            # statistics use steps 501-1500, i.e. indices 500..1499 of the recorded series
-N_REPS = 30
+N_REPS = 60              # main tests (amendment 1; was 30)
+N_REPS_SENSITIVITY = 30  # every book size of the sensitivity analysis, n0 included
 MAX_FAILED_POINTS = 3    # more failed grid points in a replication -> it is replaced (prereg, section 7)
 MAX_REP = 99             # the seed formula leaves room for replication numbers 0..99
 
 J_FIX = None             # smallest grid point with mean |m| >= 0.8 without dealers (prereg, section 4)
 J_FIX_PROVISIONAL = 1.1  # value from the uncalibrated debug sweep (docs/debug_sweep_J.png)
-J_REF = None             # largest grid point with mean |m| <= 0.3 without dealers
+J_REF = None             # amendment 1: largest grid point left of the chi peak with chi <= half its maximum
 M_FIX_LEVEL = 0.8
-M_REF_LEVEL = 0.3
+REF_CHI_FRACTION = 0.5
 
 # ---------------------------------------------------------------- hysteresis, hypothesis H2 (prereg, section 5)
 HYST_BURN_IN = 500       # steps at J = 0 before the first level

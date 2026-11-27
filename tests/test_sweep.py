@@ -35,10 +35,11 @@ def test_seed_formula_of_the_prereg():
 
 def test_protocol_values_of_the_prereg():
     assert C.J_GRID[0] == 0.0 and C.J_GRID[-1] == 2.0 and len(C.J_GRID) == 21
-    assert (C.STEPS, C.BURN_IN, C.N_REPS) == (1500, 500, 30)
+    assert (C.STEPS, C.BURN_IN, C.N_REPS, C.N_REPS_SENSITIVITY) == (1500, 500, 60, 30)
+    assert C.N_REPS + 30 <= C.MAX_REP + 1      # room in the seed stream for replacement replications
     assert C.STEPS - C.BURN_IN >= 1000
     assert C.SIZE_FACTORS[C.BASE_SIZE] == 1.0
-    assert C.BASE.a1 == 0.6
+    assert (C.BASE.a1, C.BASE.a2, C.BASE.v1) == (0.6, 30.0, 0.1)   # amendment 1: a2 only
     assert C.HYST_BURN_IN + 2 * len(C.J_GRID) * C.HYST_STEP == 8900
 
 
@@ -46,7 +47,7 @@ def test_market_config_and_book_size():
     assert C.book_size('none', 4, 288) == 0.0
     assert C.book_size('short', 0, 288) == 72.0
     cfg = C.market_config('long', 0.7, 144.0)
-    assert (cfg.J, cfg.dealer_side, cfg.dealer_book, cfg.a1) == (0.7, 'long', 144.0, 0.6)
+    assert (cfg.J, cfg.dealer_side, cfg.dealer_book, cfg.a1, cfg.a2) == (0.7, 'long', 144.0, 0.6, 30.0)
 
 
 def test_full_runs_need_frozen_parameters(monkeypatch):
@@ -214,10 +215,10 @@ def test_run_row_has_kappa_and_horizon_sigma():
 
 def test_overrides_change_the_market_and_are_checked_on_resume(tmp_path):
     base = small_task(config='none', steps=150, burn_in=50)
-    strong = rs.Task(**{**base.__dict__, 'overrides': rs.format_overrides({'a2': 30})})
-    assert rs.parse_overrides(strong.overrides) == {'a2': 30.0}
+    strong = rs.Task(**{**base.__dict__, 'overrides': rs.format_overrides({'a2': 1})})
+    assert rs.parse_overrides(strong.overrides) == {'a2': 1.0}
     a, b = rs.simulate(base), rs.simulate(strong)
-    assert a['mean_abs_m'] != b['mean_abs_m']        # same seed, stronger price term: another run
+    assert a['mean_abs_m'] != b['mean_abs_m']        # same seed, another weight of the price term: another run
     path = str(tmp_path / 'sweep.csv')
     rs.run_tasks([base], path, workers=1, progress=False)
     with pytest.raises(RuntimeError):

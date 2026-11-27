@@ -133,13 +133,13 @@ def main():
     per_loop = h['runtime_s'].mean()
     n_main = len(C.CONFIGS) * len(C.J_GRID) * C.N_REPS
     cpu_main = len(C.J_GRID) * C.N_REPS * per_run.sum()
-    cpu_sens = sum(len(C.J_GRID) * C.N_REPS * (2 * per_size[s] + per_run['none'])
+    cpu_sens = sum(len(C.J_GRID) * C.N_REPS_SENSITIVITY * (2 * per_size[s] + per_run['none'])
                    for s in range(len(C.SIZE_FACTORS)) if s != C.BASE_SIZE)
     cpu_hyst = len(C.CONFIGS) * C.N_REPS * per_loop
     reserve = 1.05   # replacement runs (prereg, section 7)
     plan = pd.DataFrame([
         ('основной (Г и В1)', n_main, cpu_main),
-        ('чувствительность, 4 доп. размера', 4 * n_main, cpu_sens),
+        ('чувствительность, 4 доп. размера', 4 * len(C.CONFIGS) * len(C.J_GRID) * C.N_REPS_SENSITIVITY, cpu_sens),
         ('гистерезис (В2)', len(C.CONFIGS) * C.N_REPS, cpu_hyst),
     ], columns=['эксперимент', 'прогонов', 'cpu_s'])
     plan['ЦП, ч'] = plan['cpu_s'] * reserve / 3600
@@ -205,9 +205,10 @@ def write_doc(args, code, grid, n0, df, h, probe, sweep_wall, hyst_wall, probe_w
         f'Параллельное ускорение на развёртке: {speedup:.1f}× при {args.workers} процессах '
         '(сумма времени прогонов / время по часам).', '',
         '## План полного счёта', '',
-        'Основной эксперимент: 3 × 21 × 30 = 1890 прогонов (В1 берёт σ из тех же прогонов при J_fix). '
-        'Чувствительность: ещё 4 размера книги × 1890 (базовый размер совпадает с основным). '
-        'Гистерезис: 3 × 30 длинных прогонов. Запас 5% на замены прерванных прогонов.', '',
+        f'Основной эксперимент: 3 × 21 × {C.N_REPS} = {len(C.CONFIGS) * len(C.J_GRID) * C.N_REPS} прогонов (В1 берёт σ из тех же прогонов при J_fix). '
+        f'Чувствительность: ещё 4 размера книги × 3 × 21 × {C.N_REPS_SENSITIVITY} (на базовом размере — первые '
+        f'{C.N_REPS_SENSITIVITY} репликаций основного эксперимента). '
+        f'Гистерезис: 3 × {C.N_REPS} длинных прогонов. Запас 5% на замены прерванных прогонов.', '',
         md_table(plan, '{:.2f}'), '',
         f'Итого на этой машине около {total_wall:.1f} ч. Порядок: основной эксперимент и гистерезис сразу после '
         '`config-v1`, чувствительность следом; при нехватке времени `--configs` делит счёт между ноутбуками '

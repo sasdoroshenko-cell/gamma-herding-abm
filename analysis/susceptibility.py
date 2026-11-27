@@ -141,20 +141,23 @@ def mean_curves(df: pd.DataFrame, value: str, jc: pd.DataFrame, size_index: int)
 
 def protocol_point(df_none: pd.DataFrame, rule: str) -> float:
     """
-    J_fix or J_ref from runs without dealers (prereg, section 4), using the mean |m| over seeds at
-    every grid point:
-      'fix': the smallest grid point with mean |m| >= 0.8;
-      'ref': the largest grid point with mean |m| <= 0.3.
-    Returns NaN if no point satisfies the rule.
+    J_fix or J_ref from runs without dealers, using the mean over seeds at every grid point:
+      'fix' (prereg, section 4): the smallest grid point with mean |m| >= 0.8, NaN if there is none;
+      'ref' (amendment 1): the largest grid point to the left of the peak of the mean chi(J) where chi
+            is at most half of its maximum, i.e. a point clearly below the transition; the smallest
+            grid point if there is none. The old rule (mean |m| <= 0.3) selects no point when the
+            price channel is strong, because |m| is above 0.3 already at J = 0.
     """
     d = df_none[~df_none['failed']]
-    m = d.groupby('J')['mean_abs_m'].mean().sort_index()
     if rule == 'fix':
+        m = d.groupby('J')['mean_abs_m'].mean().sort_index()
         hits = m[m >= C.M_FIX_LEVEL]
         return float(hits.index.min()) if len(hits) else float('nan')
     if rule == 'ref':
-        hits = m[m <= C.M_REF_LEVEL]
-        return float(hits.index.max()) if len(hits) else float('nan')
+        chi = d.groupby('J')['chi'].mean().sort_index()
+        left = chi[chi.index < chi.idxmax()]
+        hits = left[left <= C.REF_CHI_FRACTION * chi.max()]
+        return float(hits.index.max()) if len(hits) else float(chi.index.min())
     raise ValueError("rule must be 'fix' or 'ref'")
 
 

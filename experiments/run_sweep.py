@@ -339,14 +339,19 @@ def main():
         if any(v is not None for v in (args.reps, args.steps, args.burn_in, args.book)) or args.grid_step != 0.1:
             parser.error('--reps, --grid-step, --steps, --burn-in and --book are for --scale debug only')
         C.require_frozen()
-        n0, grid, n_reps, steps, burn_in = C.N0, list(range(len(C.J_GRID))), C.N_REPS, C.STEPS, C.BURN_IN
+        n0, grid, steps, burn_in = C.N0, list(range(len(C.J_GRID))), C.STEPS, C.BURN_IN
         sizes = [C.BASE_SIZE] if args.scale == 'main' else list(range(len(C.SIZE_FACTORS)))
         path = args.out or os.path.join(ROOT, 'results', 'summary', 'sweep.csv')
         j_fix_index, debug = C.j_index(C.J_FIX), False
 
+    # the main experiment (book size n0) has N_REPS replications, the other sizes N_REPS_SENSITIVITY
+    passes = ([([C.BASE_SIZE], n_reps)] if args.scale == 'debug' else
+              [([C.BASE_SIZE], C.N_REPS)] + ([([s for s in sizes if s != C.BASE_SIZE], C.N_REPS_SENSITIVITY)]
+                                             if args.scale == 'sensitivity' else []))
     t0 = time.perf_counter()
-    rows = sweep(args.configs, sizes, grid, n_reps, n0, path, args.workers, steps, burn_in, debug, j_fix_index,
-                 args.series_reps, os.path.join(ROOT, 'results', 'series'))
+    for pass_sizes, pass_reps in passes:
+        rows = sweep(args.configs, pass_sizes, grid, pass_reps, n0, path, args.workers, steps, burn_in, debug,
+                     j_fix_index, args.series_reps, os.path.join(ROOT, 'results', 'series'))
     print(f"готово за {time.perf_counter() - t0:.0f} с; прерванные прогоны:")
     report_failures([r for r in rows if r['config'] in args.configs and r['size_index'] in sizes])
 
