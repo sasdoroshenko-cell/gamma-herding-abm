@@ -10,7 +10,7 @@ The loop area A = sum_J |m_up(J) - m_down(J)| * dJ is written with the curves.
 A failed run is replaced by the next seed in the stream (prereg, section 7).
 
 Usage (from the repository root, with .venv active):
-    python experiments/run_hysteresis.py --scale main      # short, none, long x 30 replications
+    python experiments/run_hysteresis.py --scale main      # short, none, long x 60 replications (N_REPS)
     python experiments/run_hysteresis.py --scale debug --reps 2 --grid-step 0.5 --level-steps 100
 
 Output: results/summary/hysteresis.csv (one row per run: area and both curves).

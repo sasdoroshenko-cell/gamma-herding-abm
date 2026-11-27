@@ -9,7 +9,7 @@ sections 5 and 7).
 Rules of the prereg applied here:
 - a failed run leaves its point out of chi(J) of that replication;
 - a replication with more than 3 failed points is replaced by the next one in the seed stream,
-  so the sample is the first 30 valid replications in the order of their numbers;
+  so the sample is the first N_REPS valid replications in the order of their numbers;
 - a maximum at the edge of the grid (J = 0 or J = 2) gives J_c equal to the edge and is flagged.
 
 Input is the table written by experiments/run_sweep.py (one row per run).

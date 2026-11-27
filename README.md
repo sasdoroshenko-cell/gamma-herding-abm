@@ -67,11 +67,13 @@ n₀, J_fix и J_ref считаются по правилам prereg после 
 
 ```bash
 python experiments/run_sweep.py --scale debug --reps 2 --grid-step 0.5 --steps 600 --burn-in 200   # проверка
-python experiments/run_sweep.py --scale main            # основной эксперимент: 3 × 21 × 30 прогонов
-python experiments/run_sweep.py --scale sensitivity     # + ещё 4 размера книги
+python experiments/run_sweep.py --scale main            # основной эксперимент: 3 × 21 × 60 прогонов
+python experiments/run_sweep.py --scale sensitivity     # + ещё 4 размера книги по 30 репликаций
 python experiments/run_sweep.py --scale main --configs short   # только часть, например на другом ноутбуке
 python experiments/run_hysteresis.py --scale main       # петли гистерезиса для В2
 python experiments/pilot.py                             # пилот всего конвейера и замер времени: docs/pilot.md
+python experiments/power_check.py                       # мощность главной гипотезы без дилеров: docs/power.md
+python experiments/kappa_check.py                       # механизм и устойчивость с дилерами: docs/kappa_check.md
 python analysis/make_figures.py                         # рисунки F4–F8 из results/summary/
 ```
 

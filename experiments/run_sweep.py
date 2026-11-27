@@ -11,7 +11,7 @@ prereg (section 7): a replication with more than 3 failed grid points is replace
 in the seed stream, and a failed run at J_fix is replaced by the next seed for hypothesis H1.
 
 Usage (from the repository root, with .venv active):
-    python experiments/run_sweep.py --scale main          # 3 configurations x 21 J x 30 replications
+    python experiments/run_sweep.py --scale main          # 3 configurations x 21 J x 60 replications (N_REPS)
     python experiments/run_sweep.py --scale sensitivity   # + the other four book sizes
     python experiments/run_sweep.py --scale debug --reps 2 --grid-step 0.5 --steps 600 --burn-in 200
     python experiments/run_sweep.py --scale main --configs short       # split the work between laptops
