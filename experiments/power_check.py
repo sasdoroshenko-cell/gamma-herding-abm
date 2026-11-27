@@ -59,10 +59,14 @@ def path_for(a1, a2, arm):
     return os.path.join(OUT, f'a1_{a1:g}_a2_{a2:g}_{arm}.csv')
 
 
-def resampled_power(jc: dict, n: int, draws: int = 1000, seed: int = 0) -> tuple:
-    """Share of resampled designs (n per arm, drawn from the observed J_c) where JT rejects at alpha and alpha / 3."""
+def resampled_power(jc: dict, n: int, draws: int = 1000, seed: int = 0, arms=tuple(ARMS)) -> tuple:
+    """
+    Share of resampled designs (n per arm, drawn from the observed J_c) where JT rejects at alpha and
+    alpha / 3. `arms` names the emulated sample used for short, none and long: ('short', 'none', 'none')
+    is the scenario in which only short gamma acts and long gamma leaves the price channel as it is.
+    """
     rng = np.random.default_rng([C.ANALYSIS_SEED, seed, n])
-    p = np.array([st.jonckheere_terpstra([rng.choice(jc[a], n) for a in ARMS], n_perm=1).p_asymptotic
+    p = np.array([st.jonckheere_terpstra([rng.choice(jc[a], n) for a in arms], n_perm=1).p_asymptotic
                   for _ in range(draws)])
     return float(np.mean(p <= C.ALPHA)), float(np.mean(p <= C.ALPHA / 3))
 
@@ -87,6 +91,8 @@ def analyse(a1, a2, n_reps):
     for n in sorted({30, n_reps}):     # 30: the replications of the prereg; n_reps: as run here
         a, h = resampled_power(jc, n)
         row[f'мощность, n={n}'] = f'{a:.2f} / {h:.2f}'
+    a, h = resampled_power(jc, n_reps, arms=('short', 'none', 'none'))
+    row[f'мощность, только short, n={n_reps}'] = f'{a:.2f} / {h:.2f}'
     return row, report
 
 
@@ -95,6 +101,7 @@ def main():
     parser.add_argument('--settings', nargs='+', help='a1:a2 pairs, e.g. 0.5:30')
     parser.add_argument('--reps', type=int, default=C.N_REPS)
     parser.add_argument('--workers', type=int, default=os.cpu_count())
+    parser.add_argument('--analyse-only', action='store_true', help='no new runs: analyse the tables in results/power')
     args = parser.parse_args()
     if not 1 <= args.reps <= 100:
         parser.error('--reps must be 1..100: the seed is offset + 100 * point + replication')
@@ -102,12 +109,17 @@ def main():
     code = git_state()
     os.makedirs(OUT, exist_ok=True)
 
+    runs_code_path = os.path.join(OUT, 'runs_code.txt')   # code state of the runs, kept for --analyse-only
     t0 = time.perf_counter()
-    for a1, a2 in settings:
-        for arm in ARMS:
-            print(f'a1 = {a1:g}, a2 = {a2:g}, {arm}')
-            rs.run_tasks(tasks_for(a1, a2, arm, args.reps), path_for(a1, a2, arm), args.workers)
+    if not args.analyse_only:
+        for a1, a2 in settings:
+            for arm in ARMS:
+                print(f'a1 = {a1:g}, a2 = {a2:g}, {arm}')
+                rs.run_tasks(tasks_for(a1, a2, arm, args.reps), path_for(a1, a2, arm), args.workers)
+        with open(runs_code_path, 'w') as f:
+            f.write(code)
     wall = time.perf_counter() - t0
+    runs_code = open(runs_code_path).read().strip() if os.path.exists(runs_code_path) else 'не записан'
 
     rows, reports = [], []
     for a1, a2 in settings:
@@ -117,14 +129,15 @@ def main():
     table = pd.DataFrame(rows)
     table.to_csv(os.path.join(OUT, 'power.csv'), index=False)
     print(table.to_string(index=False))
-    write_doc(table, reports, args.reps, code, wall)
+    write_doc(table, reports, args.reps, code, wall, runs_code)
     print('сохранено: docs/power.md, results/power/')
 
 
-def write_doc(table, reports, n_reps, code, wall):
+def write_doc(table, reports, n_reps, code, wall, runs_code=''):
     lines = [
         '# Мощность главной гипотезы: проверка без дилеров', '',
-        f'Создано скриптом `experiments/power_check.py` {date.today():%d.%m.%Y}. Код: {code}. '
+        f'Создано скриптом `experiments/power_check.py` {date.today():%d.%m.%Y}. Код анализа: {code}; '
+        f'код прогонов: {runs_code or code}. '
         f'Машина: {platform.machine()}, {os.cpu_count()} ядер; счёт {wall / 60:.0f} мин.', '',
         '## Метод', '',
         'Дилеры влияют на стадность только через цену. По модели Фрея они умножают реакцию цены на поток '
@@ -146,6 +159,10 @@ def write_doc(table, reports, n_reps, code, wall):
         'Ни одного прогона с дилером здесь нет, поэтому это не взгляд на результат эксперимента. Эмуляция '
         'предполагает, что эффект дилеров на чартистов полностью описывается M; на прогонах с дилерами это '
         'проверяет проверка механизма: κ(short) > κ(none) > κ(long).', '',
+        'Столбец «только short» — сценарий, в котором короткая гамма действует по Фрею, а длинная не меняет '
+        'ценовой канал: выборка long берётся из none. Так ведут себя дилеры на отладочных прогонах с дилерами '
+        '(проверка механизма, `experiments/kappa_check.py`); этот столбец — реалистичная оценка, '
+        'столбцы «n = …» — оптимистичная.', '',
         '## Результаты', '', md_table(table), '',
     ]
     for a1, a2, r in reports:
